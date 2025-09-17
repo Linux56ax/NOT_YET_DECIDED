@@ -5,3 +5,12 @@
   "timestamp": ISODate("2025-09-17T08:00:00Z"),
   "cause": "Normal operation"
 }
+
+
+{
+  "_id": ObjectId("64EV00234567890abcdef1"),
+  "station_id": ObjectId("64HWH001234567890abcdef"),
+  "signal_status": "red",
+  "timestamp": ISODate("2025-09-17T12:30:00Z"),
+  "cause": "Track maintenance"
+}
