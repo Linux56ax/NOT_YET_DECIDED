@@ -1,0 +1,6 @@
+{
+  "_id": ObjectId(),        // signalId
+  "stationId": ObjectId("..."),
+  "status": "green",        // Red / Yellow / Green
+  "lastUpdated": ISODate()
+}
