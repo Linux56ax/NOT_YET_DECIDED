@@ -1,0 +1,8 @@
+{
+  "_id": ObjectId(),
+  "train_id": ObjectId("12301/12302"),  // Howrah Rajdhani
+  "station_id": ObjectId("12302 HWH Rajdhani Express"),  // Howrah Junction
+  "type": "AC First Class",
+  "capacity": 72,
+  "status": "available"
+}
