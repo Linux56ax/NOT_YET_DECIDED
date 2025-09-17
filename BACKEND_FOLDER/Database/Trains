@@ -1,0 +1,10 @@
+{
+  "_id": ObjectId(),
+  "name": "Howrah Rajdhani Express",
+  "train_no": "12301",
+  "type": "superfast",
+  "priority": "high",
+  "max_speed": 130,
+  "route": ["HWH", "NDLS"],  // Howrah → New Delhi
+  "rolling_stock_id": "RS101"
+}
