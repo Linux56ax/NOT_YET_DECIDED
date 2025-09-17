@@ -1,0 +1,9 @@
+{
+  "_id": ObjectId(),        // decisionId
+  "timestamp": ISODate(),
+  "sectionId": ObjectId("..."), // reference section or train
+  "chosenSchedule": { /* JSON of adjusted arrival/departure */ },
+  "conflictsResolved": ["Train123 vs Train456"],
+  "throughputGain": 5.2,      // percentage
+  "totalDelayReduced": 15     // minutes
+}
