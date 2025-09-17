@@ -5,6 +5,6 @@
   "type": "superfast",
   "priority": "high",
   "max_speed": 130,
-  "route": ["HWH", "NDLS"],  // Howrah → New Delhi
+  "priority": 1,            // 1=high, 2=medium, 3=low
   "rolling_stock_id": "RS101"
 }
