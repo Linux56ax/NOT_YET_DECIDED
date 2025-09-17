@@ -1,0 +1,8 @@
+{
+  "_id": ObjectId(),        // routeId
+  "trainId": ObjectId("..."),
+  "sequenceOfStations": [
+    { "stationId": ObjectId("..."), "arrivalTime": ISODate(), "departureTime": ISODate(), "distanceFromStart": 0 }
+  ],
+  "totalDistance": 1450 // km
+}
