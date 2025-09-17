@@ -1,0 +1,20 @@
+{
+  "_id": ObjectId("64TT001234567890abcdef"),
+  "train_id": ObjectId("64TR001234567890abcdef"),  // Howrah Rajdhani
+  "station_id": ObjectId("64HWH001234567890abcdef"),  // Howrah Junction
+  "arrival_time": ISODate("2025-09-17T06:00:00Z"),
+  "departure_time": ISODate("2025-09-17T06:15:00Z"),
+  "platform": 1,
+  "status": "on-time"
+}
+
+
+{
+  "_id": ObjectId("64TT00234567890abcdef1"),
+  "train_id": ObjectId("64TR00234567890abcdef1"),  // Howrah Shatabdi
+  "station_id": ObjectId("64HWH001234567890abcdef"),
+  "arrival_time": ISODate("2025-09-17T07:00:00Z"),
+  "departure_time": ISODate("2025-09-17T07:10:00Z"),
+  "platform": 2,
+  "status": "on-time"
+}
