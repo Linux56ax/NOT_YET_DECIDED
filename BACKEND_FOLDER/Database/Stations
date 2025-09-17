@@ -1,10 +1,8 @@
 {
-  "_id": ObjectId(),
-  "name": "Howrah Junction",
-  "code": "HWH",
-  "type": "junction",
-  "lat": 22.5958,
-  "lon": 88.2636,
+  "_id": ObjectId(),        // stationId
+  "stationName": "Howrah Junction",
+  "type": "junction",       // normal / junction
+  "location": { "lat": 22.5958, "lng": 88.2636 },
   "platforms": 23,
-  "connections": ["ST201", "ST202", "ST203"]
+  "speedLimit": 120         // km/h
 }
