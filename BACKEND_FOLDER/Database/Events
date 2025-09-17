@@ -1,0 +1,7 @@
+{
+  "_id": ObjectId("64EV001234567890abcdef"),
+  "station_id": ObjectId("64HWH001234567890abcdef"),
+  "signal_status": "green",
+  "timestamp": ISODate("2025-09-17T08:00:00Z"),
+  "cause": "Normal operation"
+}
