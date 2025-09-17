@@ -1,0 +1,7 @@
+{
+  "_id": ObjectId(),        // logId
+  "timestamp": ISODate(),
+  "actionTaken": "reroute",
+  "reason": "congestion",
+  "controllerId": "TMS001"
+}
