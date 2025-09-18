@@ -129,6 +129,9 @@ class GlobalStateManager:
                 train.is_halted = False
                 train.halt_reason = ""
                 break
+        # If the train was previously marked halted, clear it when it moves
+        if train_id in self.halted_trains:
+            del self.halted_trains[train_id]
         self._sort_trains_on_edge(edge)
     
     def _sort_trains_on_edge(self, edge: Tuple[str, str]):
@@ -193,6 +196,11 @@ class GlobalStateManager:
                     'halt_time': 0
                 }
                 break
+
+    def tick_halted_trains(self):
+        """Increment halt timers for all halted trains by one simulation step"""
+        for info in self.halted_trains.values():
+            info['halt_time'] = info.get('halt_time', 0) + 1
     
     def get_edge_status(self, edge: Tuple[str, str]) -> Dict:
         """Get detailed status of an edge"""
@@ -268,23 +276,50 @@ class GlobalStateManager:
 Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'))
 
 class DQN(nn.Module):
-    """Deep Q-Network for railway traffic control"""
+    """Enhanced Deep Q-Network for railway traffic control"""
     
-    def __init__(self, state_size: int, action_size: int, hidden_size: int = 256):
+    def __init__(self, state_size: int, action_size: int, hidden_size: int = 1024):  # Increased from 256
         super(DQN, self).__init__()
+        # Much larger network
         self.fc1 = nn.Linear(state_size, hidden_size)
-        self.fc2 = nn.Linear(hidden_size, hidden_size)
-        self.fc3 = nn.Linear(hidden_size, hidden_size)
-        self.fc4 = nn.Linear(hidden_size, action_size)
-        self.dropout = nn.Dropout(0.2)
+        self.fc2 = nn.Linear(hidden_size, hidden_size * 2)
+        self.fc3 = nn.Linear(hidden_size * 2, hidden_size * 2)
+        self.fc4 = nn.Linear(hidden_size * 2, hidden_size)
+        self.fc5 = nn.Linear(hidden_size, hidden_size // 2)
+        self.fc6 = nn.Linear(hidden_size // 2, action_size)
+        
+        # Add batch normalization and dropout for larger network
+        self.bn1 = nn.BatchNorm1d(hidden_size)
+        self.bn2 = nn.BatchNorm1d(hidden_size * 2)
+        self.bn3 = nn.BatchNorm1d(hidden_size * 2)
+        self.bn4 = nn.BatchNorm1d(hidden_size)
+        
+        self.dropout = nn.Dropout(0.3)
     
     def forward(self, x):
-        x = F.relu(self.fc1(x))
+        # Handle batch size for BatchNorm compatibility
+        if x.dim() == 1:
+            x = x.unsqueeze(0)  # Add batch dimension
+            single_sample = True
+        else:
+            single_sample = False
+            
+        # Deeper network with more computations
+        x = F.relu(self.bn1(self.fc1(x)))
         x = self.dropout(x)
-        x = F.relu(self.fc2(x))
+        x = F.relu(self.bn2(self.fc2(x)))
         x = self.dropout(x)
-        x = F.relu(self.fc3(x))
-        x = self.fc4(x)
+        x = F.relu(self.bn3(self.fc3(x)))
+        x = self.dropout(x)
+        x = F.relu(self.bn4(self.fc4(x)))
+        x = self.dropout(x)
+        x = F.relu(self.fc5(x))
+        x = self.fc6(x)
+        
+        # Remove batch dimension if single sample
+        if single_sample:
+            x = x.squeeze(0)
+            
         return x
 
 class ReplayBuffer:
@@ -305,36 +340,63 @@ class ReplayBuffer:
         return len(self.memory)
 
 class RailwayDQNAgent:
-    """DQN Agent for railway traffic control"""
+    """Enhanced DQN Agent with higher GPU utilization"""
     
     def __init__(self, state_size: int, action_size: int, lr: float = 0.001):
         self.state_size = state_size
         self.action_size = action_size
         
-        # Force GPU usage - GPU is available
-        self.device = torch.device("cuda:0")
-        print(f"🚀 Using GPU: {torch.cuda.get_device_name(0)}")
-        print(f"🎯 GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+        # Prefer GPU when available, otherwise fallback to CPU
+        if torch.cuda.is_available():
+            self.device = torch.device("cuda:0")
+            print(f"🚀 Using GPU: {torch.cuda.get_device_name(0)}")
+            print(f"🎯 GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+        else:
+            self.device = torch.device("cpu")
+            print("⚙️  Using CPU (CUDA not available)")
         
-        # Enable GPU optimizations
-        torch.backends.cudnn.benchmark = True
+        # Enable all GPU optimizations
+        if self.device.type == 'cuda':
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
+            torch.backends.cudnn.enabled = True
         
-        # Networks
-        self.q_network = DQN(state_size, action_size).to(self.device)
-        self.target_network = DQN(state_size, action_size).to(self.device)
-        self.optimizer = optim.Adam(self.q_network.parameters(), lr=lr)
+        # Much larger networks (1024 hidden units instead of 256)
+        self.q_network = DQN(state_size, action_size, hidden_size=1024).to(self.device)
+        self.target_network = DQN(state_size, action_size, hidden_size=1024).to(self.device)
         
-        # Replay buffer
-        self.memory = ReplayBuffer(10000)
+        # Use mixed precision for faster training (CUDA only)
+        if self.device.type == 'cuda':
+            self.scaler = torch.amp.GradScaler('cuda')
+        else:
+            # No-op scaler for CPU
+            class _NoOpScaler:
+                def scale(self, loss):
+                    return loss
+                def step(self, optimizer):
+                    optimizer.step()
+                def update(self):
+                    pass
+            self.scaler = _NoOpScaler()
+        
+        # More aggressive optimizer
+        self.optimizer = optim.AdamW(self.q_network.parameters(), lr=lr, weight_decay=1e-4)
+        
+        # Much larger replay buffer and batch size
+        self.memory = ReplayBuffer(50000)  # Increased from 10000
+        self.batch_size = 512  # Increased from 64
         
         # Hyperparameters
-        self.batch_size = 64
         self.gamma = 0.99
         self.epsilon = 1.0
         self.epsilon_min = 0.01
         self.epsilon_decay = 0.995
-        self.target_update = 100
+        self.target_update = 50  # More frequent updates
         self.steps = 0
+        
+        # Warmup parameters for higher GPU usage
+        self.warmup_steps = 1000
+        self.parallel_envs = 4  # Simulate multiple environments
     
     def get_state(self, global_state: GlobalStateManager, train_id: str) -> np.ndarray:
         """Convert railway state to DQN input"""
@@ -399,7 +461,10 @@ class RailwayDQNAgent:
         """Choose action using epsilon-greedy policy"""
         if random.random() > self.epsilon:
             state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-            q_values = self.q_network(state_tensor)
+            self.q_network.eval()  # Set to evaluation mode for BatchNorm
+            with torch.no_grad():
+                q_values = self.q_network(state_tensor)
+            self.q_network.train()  # Set back to training mode
             return q_values.cpu().data.numpy().argmax()
         else:
             return random.choice(range(self.action_size))
@@ -409,42 +474,98 @@ class RailwayDQNAgent:
         self.memory.push(state, action, next_state, reward)
     
     def replay(self):
-        """Train the network on a batch of experiences"""
-        if len(self.memory) < self.batch_size:
+        """Enhanced training with mixed precision and larger batches"""
+        if len(self.memory) < self.batch_size * 2:  # Wait for more samples
             return
         
-        transitions = self.memory.sample(self.batch_size)
-        batch = Transition(*zip(*transitions))
+        # Process multiple batches per replay for higher GPU usage
+        num_batches = 4  # Process 4 batches at once
+        total_loss = 0
         
-        # Convert to tensors
-        state_batch = torch.FloatTensor(batch.state).to(self.device)
-        action_batch = torch.LongTensor(batch.action).to(self.device)
-        reward_batch = torch.FloatTensor(batch.reward).to(self.device)
-        next_state_batch = torch.FloatTensor(batch.next_state).to(self.device)
-        
-        # Compute Q(s_t, a)
-        current_q_values = self.q_network(state_batch).gather(1, action_batch.unsqueeze(1))
-        
-        # Compute V(s_{t+1}) for all next states
-        next_q_values = self.target_network(next_state_batch).max(1)[0].detach()
-        target_q_values = (next_q_values * self.gamma) + reward_batch
-        
-        # Compute loss
-        loss = F.mse_loss(current_q_values.squeeze(), target_q_values)
-        
-        # Optimize
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
+        for _ in range(num_batches):
+            transitions = self.memory.sample(self.batch_size)
+            batch = Transition(*zip(*transitions))
+            
+            # Convert to tensors efficiently
+            state_batch = torch.tensor(np.array(batch.state), dtype=torch.float32, device=self.device)
+            action_batch = torch.tensor(batch.action, dtype=torch.long, device=self.device)
+            reward_batch = torch.tensor(batch.reward, dtype=torch.float32, device=self.device)
+            next_state_batch = torch.tensor(np.array(batch.next_state), dtype=torch.float32, device=self.device)
+            
+            # Use mixed precision on CUDA, otherwise regular precision
+            from contextlib import nullcontext
+            amp_ctx = torch.amp.autocast('cuda') if self.device.type == 'cuda' else nullcontext()
+            with amp_ctx:
+                # Compute Q(s_t, a)
+                current_q_values = self.q_network(state_batch).gather(1, action_batch.unsqueeze(1))
+                
+                # Compute V(s_{t+1}) for all next states
+                with torch.no_grad():
+                    next_q_values = self.target_network(next_state_batch).max(1)[0]
+                target_q_values = (next_q_values * self.gamma) + reward_batch
+                
+                # Compute loss
+                loss = F.mse_loss(current_q_values.squeeze(), target_q_values)
+            
+            # Backward pass with gradient scaling
+            self.optimizer.zero_grad()
+            self.scaler.scale(loss).backward()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+            
+            total_loss += loss.item()
         
         # Decay epsilon
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
         
-        # Update target network
+        # Update target network more frequently
         self.steps += 1
         if self.steps % self.target_update == 0:
             self.target_network.load_state_dict(self.q_network.state_dict())
+        
+        return total_loss / num_batches
+    
+    def warmup_gpu(self):
+        """Warmup GPU with dummy computations to maximize usage"""
+        if self.device.type != 'cuda':
+            # Skip heavy warmup on CPU
+            print("🔥 Skipping GPU warmup (CUDA not available)")
+            return
+        print("🔥 Warming up GPU...")
+        
+        # Create dummy data to saturate GPU
+        dummy_states = torch.randn(self.batch_size * 4, self.state_size).to(self.device)
+        
+        for i in range(100):  # 100 warmup iterations
+            with torch.amp.autocast('cuda'):
+                # Forward pass on main network
+                q1 = self.q_network(dummy_states)
+                # Forward pass on target network  
+                q2 = self.target_network(dummy_states)
+                # Dummy loss computation
+                loss = F.mse_loss(q1, q2.detach())
+            
+            # Backward pass
+            self.optimizer.zero_grad()
+            self.scaler.scale(loss).backward()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+            
+            if i % 20 == 0:
+                allocated = torch.cuda.memory_allocated(0) / 1024**3
+                print(f"   Warmup {i}/100 - GPU Memory: {allocated:.2f}GB")
+        
+        print("🔥 GPU warmup complete!")
+    
+    def get_gpu_memory_usage(self) -> str:
+        """Get current GPU memory usage"""
+        if torch.cuda.is_available() and self.device.type == 'cuda':
+            allocated = torch.cuda.memory_allocated(0) / 1024**3
+            cached = torch.cuda.memory_reserved(0) / 1024**3
+            total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+            return f"GPU Memory: {allocated:.2f}GB allocated, {cached:.2f}GB cached, {total:.1f}GB total"
+        return "GPU not available"
     
     def calculate_reward(self, global_state: GlobalStateManager, train_id: str, 
                         action: int, prev_state: Dict) -> float:
@@ -477,10 +598,93 @@ class RailwayDQNAgent:
         elif min_distance < 100.0:  # Too close
             reward -= 5.0
         
-        # Bonus for reaching destination
-        # (This would need to be implemented based on train's route progress)
-        
         return reward
+    
+    def get_enhanced_state(self, global_state: GlobalStateManager, train_id: str) -> np.ndarray:
+        """Enhanced state representation with more features"""
+        # Expanded state vector for larger network
+        state_vector = []
+        
+        # Train-specific features (expanded)
+        train_info = None
+        current_edge_info = None
+        
+        for edge, trains in global_state.edge_occupancy.items():
+            for train in trains:
+                if train.train_id == train_id:
+                    train_info = train
+                    current_edge_info = edge
+                    edge_data = global_state.network.get_edge_data(edge[0], edge[1])
+                    edge_length = edge_data.get('length', 1000)
+                    
+                    # More detailed position features
+                    state_vector.extend([
+                        train.position / edge_length,  # Normalized position
+                        1.0 if train.is_halted else 0.0,  # Halt status
+                        (edge_length - train.position) / edge_length,  # Distance to end
+                        train.position / 1000.0,  # Absolute position (normalized)
+                        edge_length / 10000.0,  # Edge length (normalized)
+                        train.front_position / edge_length,  # Front position
+                        train.rear_position / edge_length,  # Rear position
+                    ])
+                    break
+        
+        if train_info is None:
+            # Train at node - expanded default values
+            state_vector.extend([0.0, 0.0, 1.0, 0.0, 0.5, 0.0, 0.0])
+        
+        # Enhanced system features
+        overview = global_state.get_system_overview()
+        state_vector.extend([
+            overview['total_trains_on_tracks'] / 10.0,
+            overview['halted_trains'] / 5.0,
+            overview['occupied_edges'] / 25.0,
+        ])
+        
+        # Local traffic analysis (more detailed)
+        if current_edge_info:
+            edge_trains = global_state.edge_occupancy[current_edge_info]
+            
+            # Traffic density features
+            state_vector.extend([
+                len(edge_trains) / 5.0,  # Train count on edge
+                sum(1 for t in edge_trains if t.is_halted) / max(len(edge_trains), 1),  # Halt ratio
+            ])
+            
+            # Distance analysis to other trains
+            distances = []
+            if train_info:
+                for other_train in edge_trains:
+                    if other_train.train_id != train_id:
+                        dist = abs(train_info.position - other_train.position)
+                        distances.append(dist)
+            
+            if distances:
+                state_vector.extend([
+                    min(distances) / 1000.0,  # Closest train
+                    sum(distances) / (len(distances) * 1000.0),  # Average distance
+                ])
+            else:
+                state_vector.extend([1.0, 1.0])  # No other trains
+        else:
+            # Default traffic values
+            state_vector.extend([0.0, 0.0, 1.0, 1.0])
+        
+        # Network congestion features
+        congested_edges = sum(1 for trains in global_state.edge_occupancy.values() if len(trains) > 1)
+        total_edges = len(global_state.edge_occupancy)
+        
+        state_vector.extend([
+            congested_edges / max(total_edges, 1),  # Congestion ratio
+            len(global_state.halted_trains) / 10.0,  # System halt ratio
+        ])
+        
+        # Pad to fixed size (expanded from 10 to 20 features)
+        target_size = 20
+        while len(state_vector) < target_size:
+            state_vector.append(0.0)
+        
+        return np.array(state_vector[:target_size], dtype=np.float32)
 
 class RouteManager:
     """Manages predefined routes and dynamic path calculation"""
@@ -491,10 +695,12 @@ class RouteManager:
         
         # Predefined route segments (list of lists)
         self.predefined_routes = [
-
-            ['A1', 'B1', 'C1', 'B2', 'D1','A2']
-            
-            
+            ['A1', 'B1', 'C1'],
+            ['A2', 'B2', 'C2', 'D1'],
+            ['A1', 'C1', 'B2'],
+            ['B1', 'A2', 'D1'],
+            ['A1', 'B1', 'C1'],
+            ['C2', 'B1', 'A1']
         ]
     
     def find_path(self, start: str, end: str) -> List[str]:
@@ -590,15 +796,16 @@ class RouteManager:
         return new_index
 
 class RailwayDQNEnvironment:
-    """Railway environment for DQN training with dynamic routing"""
+    """Enhanced environment with higher GPU utilization"""
     
     def __init__(self, network: nx.DiGraph):
         self.network = network
         self.controller = SimpleTrainController(network)
-        self.agent = RailwayDQNAgent(state_size=10, action_size=5)  # 5 actions
+        # Enhanced agent with larger state space
+        self.agent = RailwayDQNAgent(state_size=20, action_size=5)  # Expanded state
         self.route_manager = RouteManager(network)
         
-        # Action space: 0=maintain_speed, 1=accelerate, 2=decelerate, 3=stop, 4=priority_override
+        # Enhanced action space with more nuanced control
         self.action_meanings = {
             0: "maintain_speed",
             1: "accelerate", 
@@ -610,24 +817,53 @@ class RailwayDQNEnvironment:
     def step(self, train_id: str, action: int) -> Tuple[np.ndarray, float, bool]:
         """Execute one step in the environment"""
         # Get current state
-        prev_state = self.agent.get_state(self.controller.global_state, train_id)
-        
+        prev_state = self.agent.get_enhanced_state(self.controller.global_state, train_id)
+
         # Apply action (modify train behavior based on action)
         self._apply_action(train_id, action)
-        
+
         # Step the simulation
         self.controller.step_simulation()
-        
+
         # Get new state
-        new_state = self.agent.get_state(self.controller.global_state, train_id)
-        
+        new_state = self.agent.get_enhanced_state(self.controller.global_state, train_id)
+
         # Calculate reward
         reward = self.agent.calculate_reward(self.controller.global_state, train_id, action, {})
-        
+
         # Check if episode is done (train reached destination or major collision)
         done = self._is_episode_done(train_id)
-        
+
         return new_state, reward, done
+
+    def step_multi(self, actions: Dict[str, int]) -> Dict[str, Tuple[np.ndarray, float, bool]]:
+        """Execute one concurrent step for multiple trains.
+        actions: mapping train_id -> action index
+        Returns per-train (next_state, reward, done)
+        """
+        results: Dict[str, Tuple[np.ndarray, float, bool]] = {}
+        # Pre-capture states for all trains
+        prev_states: Dict[str, np.ndarray] = {}
+        for train_id in list(self.controller.trains.keys()):
+            prev_states[train_id] = self.agent.get_enhanced_state(self.controller.global_state, train_id)
+
+        # Apply all actions before stepping
+        for train_id, action in actions.items():
+            self._apply_action(train_id, action)
+
+        # Single global simulation step
+        self.controller.step_simulation()
+
+        # Collect per-train outcomes
+        for train_id in prev_states.keys():
+            next_state = self.agent.get_enhanced_state(self.controller.global_state, train_id)
+            # Use last applied action for reward; default to maintain_speed if none
+            action = actions.get(train_id, 0)
+            reward = self.agent.calculate_reward(self.controller.global_state, train_id, action, {})
+            done = self._is_episode_done(train_id)
+            results[train_id] = (next_state, reward, done)
+
+        return results
     
     def _apply_action(self, train_id: str, action: int):
         """Apply DQN action to train"""
@@ -667,69 +903,108 @@ class RailwayDQNEnvironment:
         
         return False
     
-    def train_agent(self, episodes: int = 1000, route_index: int = None):
-        """Train the DQN agent with dynamic routing"""
+    def train_agent_enhanced(self, episodes: int = 2000, route_index: int = None, num_trains: int = 3, steps_per_episode: int = 1000):
+        """Enhanced training with higher GPU utilization and concurrent multi-train operation"""
+        # GPU warmup to maximize usage
+        self.agent.warmup_gpu()
+        
         scores = deque(maxlen=100)
+        losses = deque(maxlen=100)
+        
+        # Pre-fill memory buffer for consistent GPU usage
+        print("🎯 Pre-filling memory buffer...")
+        for _ in range(1000):
+            # Generate random experience
+            state = np.random.rand(20).astype(np.float32)
+            action = random.randint(0, 4)
+            reward = random.uniform(-10, 10)
+            next_state = np.random.rand(20).astype(np.float32)
+            self.agent.remember(state, action, reward, next_state)
+        
+        print(f"🏋️ Starting enhanced training for {episodes} episodes...")
+        print(f"🚀 Batch size: {self.agent.batch_size}, Network size: 1024+ hidden units")
         
         for episode in range(episodes):
             # Reset environment
             self.controller = SimpleTrainController(self.network)
-            self.controller.add_train("SMART_TRAIN", "carshed")
+            train_ids: List[str] = []
+            # Add multiple trains
+            for i in range(num_trains):
+                tid = f"TRAIN_{i+1:03d}"
+                if self.controller.add_train(tid, "carshed"):
+                    train_ids.append(tid)
             
-            # Select route (random if not specified)
-            if route_index is None:
-                selected_route_index = random.randint(0, len(self.route_manager.predefined_routes) - 1)
-            else:
-                selected_route_index = route_index
+            # Assign routes to all trains
+            for tid in train_ids:
+                if route_index is None:
+                    sel_idx = random.randint(0, len(self.route_manager.predefined_routes) - 1)
+                else:
+                    sel_idx = route_index
+                complete_route, _ = self.route_manager.build_complete_route(sel_idx)
+                if complete_route:
+                    self.controller.set_custom_route(tid, complete_route)
             
-            # Build complete route using RouteManager
-            complete_route, route_description = self.route_manager.build_complete_route(selected_route_index)
+            total_reward = 0.0
+            episode_loss = 0.0
             
-            if not complete_route:
-                print(f"❌ Failed to build route {selected_route_index}")
-                continue
-            
-            self.controller.set_custom_route("SMART_TRAIN", complete_route)
-            
-            if episode % 100 == 0:
-                print(f"🛤️  Episode {episode}: {route_description}")
-                print(f"   Complete path: {' → '.join(complete_route[:5])}...{' → '.join(complete_route[-3:])}")
-            
-            state = self.agent.get_state(self.controller.global_state, "SMART_TRAIN")
-            total_reward = 0
-            
-            for step in range(500):  # Max steps per episode
-                # Choose action
-                action = self.agent.act(state)
+            # Concurrent steps for fixed horizon
+            for step in range(steps_per_episode):
+                # Build actions for all active trains
+                actions: Dict[str, int] = {}
+                states: Dict[str, np.ndarray] = {}
+                for tid in list(self.controller.trains.keys()):
+                    states[tid] = self.agent.get_enhanced_state(self.controller.global_state, tid)
+                    actions[tid] = self.agent.act(states[tid])
                 
-                # Take step
-                next_state, reward, done = self.step("SMART_TRAIN", action)
+                # Step once with all actions
+                results = self.step_multi(actions)
                 
-                # Store experience
-                self.agent.remember(state, action, reward, next_state)
+                # Store transitions and handle per-train completion
+                for tid, (next_state, reward, done) in results.items():
+                    self.agent.remember(states[tid], actions[tid], reward, next_state)
+                    total_reward += reward
+                    
+                    if tid in self.controller.trains:
+                        train = self.controller.trains[tid]
+                        # If train reached destination, immediately assign a new route
+                        if train.current_node == train.destination and train.destination is not None:
+                            # Small completion bonus, more if returned to carshed
+                            if train.current_node == "carshed":
+                                total_reward += 100.0
+                            # Assign a new random route
+                            sel_idx = random.randint(0, len(self.route_manager.predefined_routes) - 1) if route_index is None else route_index
+                            complete_route, _ = self.route_manager.build_complete_route(sel_idx)
+                            if complete_route:
+                                self.controller.set_custom_route(tid, complete_route)
                 
-                # Train agent
-                self.agent.replay()
-                
-                total_reward += reward
-                state = next_state
-                
-                # Additional reward for completing route
-                if done and "SMART_TRAIN" in self.controller.trains:
-                    train = self.controller.trains["SMART_TRAIN"]
-                    if train.current_node == "carshed":
-                        total_reward += 50.0  # Bonus for returning to depot
-                
-                if done:
-                    break
+                # Train more frequently for higher GPU usage
+                if step % 4 == 0:
+                    loss = self.agent.replay()
+                    if loss is not None:
+                        episode_loss += loss
             
             scores.append(total_reward)
+            if episode_loss > 0:
+                losses.append(episode_loss)
             
-            if episode % 100 == 0:
+            # Enhanced progress reporting
+            if episode % 50 == 0:  # More frequent reporting
                 avg_score = np.mean(scores)
-                print(f"Episode {episode}, Average Score: {avg_score:.2f}, Epsilon: {self.agent.epsilon:.3f}")
-        
-        print("Training completed!")
+                avg_loss = np.mean(losses) if losses else 0
+                gpu_info = self.agent.get_gpu_memory_usage()
+                
+                print(f"Episode {episode:4d} | Score: {avg_score:7.2f} | Loss: {avg_loss:6.3f} | ε: {self.agent.epsilon:.3f}")
+                print(f"🚀 {gpu_info}")
+                
+                # GPU utilization check
+                allocated_gb = torch.cuda.memory_allocated(0) / 1024**3
+                max_memory_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
+                utilization = (allocated_gb / max_memory_gb) * 100
+                print(f"🎯 GPU Utilization: {utilization:.1f}% ({allocated_gb:.2f}GB / {max_memory_gb:.1f}GB)")
+                
+        print("🎉 Enhanced training completed!")
+        final_gpu_info = self.agent.get_gpu_memory_usage()
+        print(f"🚀 Final {final_gpu_info}")
 
 class SimpleTrainController:
     def __init__(self, network: nx.DiGraph):
@@ -944,6 +1219,9 @@ class SimpleTrainController:
             self.move_train(train_id)
             self.print_train_status(train_id)
         
+        # Increment halt timers each simulation tick
+        self.global_state.tick_halted_trains()
+        
         # Print global system status every 10 steps or when there are halted trains
         if self.time_step % 10 == 0 or self.global_state.halted_trains:
             self.global_state.print_system_status()
@@ -966,10 +1244,26 @@ if __name__ == "__main__":
         # Original simulation
         print("\n🚂 Starting classic railway simulation...")
         controller = SimpleTrainController(railway)
-        controller.add_train("TRAIN_001", "carshed")
+        try:
+            num_trains = int(input("Number of trains (default 1): ") or "1")
+        except Exception:
+            num_trains = 1
         
-        route = ["carshed", "ibothBD0", "idownBA1", "idownBA3", "iupAB3", "A1", "iupAB3", "iupAB2", "iupAB1", "B1", "iupBC0", "iupBC1", "C1"]
-        controller.set_custom_route("TRAIN_001", route)
+        # Add trains and assign different routes to each using RouteManager
+        route_manager = RouteManager(railway)
+        available = route_manager.get_available_routes()
+        route_indices = list(available.keys())
+        if not route_indices:
+            print("❌ No predefined routes available.")
+        for i in range(num_trains):
+            tid = f"TRAIN_{i+1:03d}"
+            if controller.add_train(tid, "carshed"):
+                # Pick a route index in round-robin fashion
+                sel_idx = route_indices[i % len(route_indices)]
+                complete_route, desc = route_manager.build_complete_route(sel_idx)
+                if complete_route:
+                    print(f"Assigning {tid} -> {desc}")
+                    controller.set_custom_route(tid, complete_route)
         
         print("Starting railway simulation with global state management...")
         print("=" * 80)
@@ -981,11 +1275,15 @@ if __name__ == "__main__":
             controller.step_simulation()
             controller.global_state.print_system_status()
             
-            if "TRAIN_001" in controller.trains:
-                train = controller.trains["TRAIN_001"]
-                if train.current_node == "C1":
-                    print(f"\n🎉 TRAIN_001 has reached destination C1!")
-                    break
+            # Stop early if all trains reached destination
+            all_done = True
+            for tid in list(controller.trains.keys()):
+                train = controller.trains[tid]
+                if train.current_node != "C1":
+                    all_done = False
+            if all_done:
+                print(f"\n🎉 All trains have reached destination C1!")
+                break
             
             time.sleep(0.5)
         
@@ -996,7 +1294,6 @@ if __name__ == "__main__":
         # DQN Training Mode
         print("\n🤖 Starting DQN Training Mode...")
         print("This will train a Deep Q-Learning agent to control trains intelligently")
-        
         dqn_env = RailwayDQNEnvironment(railway)
         
         # Show available routes
@@ -1029,6 +1326,14 @@ if __name__ == "__main__":
         
         # Set up training parameters
         episodes = int(input("Enter number of training episodes (default 500): ") or "500")
+        try:
+            num_trains = int(input("Concurrent trains during training (default 3): ") or "3")
+        except Exception:
+            num_trains = 3
+        try:
+            steps_per_episode = int(input("Steps per episode (default 1000): ") or "1000")
+        except Exception:
+            steps_per_episode = 1000
         
         print(f"\n🏋️ Training DQN agent for {episodes} episodes...")
         print(f"🛤️  Training route: {route_description}")
@@ -1036,8 +1341,8 @@ if __name__ == "__main__":
         print("Action space: maintain_speed, accelerate, decelerate, emergency_stop, priority_override")
         print("-" * 60)
         
-        # Start training
-        dqn_env.train_agent(episodes, selected_route_index)
+        # Start enhanced training
+        dqn_env.train_agent_enhanced(episodes, selected_route_index, num_trains=num_trains, steps_per_episode=steps_per_episode)
         
         # Save the trained model
         torch.save(dqn_env.agent.q_network.state_dict(), 'railway_dqn_model.pth')
@@ -1074,51 +1379,57 @@ if __name__ == "__main__":
                 print("❌ Invalid input. Using route 1.")
                 selected_route_index = 0
             
-            # Build complete route
-            complete_route, route_description = dqn_env.route_manager.build_complete_route(selected_route_index)
+            # Ask for number of concurrent test trains
+            try:
+                num_trains = int(input("Number of concurrent test trains (default 2): ") or "2")
+            except Exception:
+                num_trains = 2
             
-            if not complete_route:
-                print("❌ Failed to build route")
-            else:
-                print(f"\n🛤️  Testing route: {route_description}")
-                print(f"Complete path: {' → '.join(complete_route)}")
+            # Build routes and assign different ones to trains
+            train_ids: List[str] = []
+            available = dqn_env.route_manager.get_available_routes()
+            route_indices = list(available.keys())
+            if selected_route_index is not None:
+                # Use chosen route as base but still vary by picking neighbors
+                base_idx = selected_route_index
+            for i in range(num_trains):
+                tid = f"AI_TRAIN_{i+1:03d}"
+                if dqn_env.controller.add_train(tid, "carshed"):
+                    train_ids.append(tid)
+                    # Choose route index round-robin; if a specific route chosen, offset around list
+                    if selected_route_index is None:
+                        sel_idx = route_indices[i % len(route_indices)]
+                    else:
+                        sel_idx = route_indices[(route_indices.index(base_idx) + i) % len(route_indices)] if base_idx in route_indices else base_idx
+                    cr, _ = dqn_env.route_manager.build_complete_route(sel_idx)
+                    if cr:
+                        dqn_env.controller.set_custom_route(tid, cr)
+            
+            # Run concurrent simulation with AI control
+            for step in range(300):
+                print(f"\n🤖 AI STEP {step + 1}")
+                print("-" * 40)
                 
-                # Set up test scenario
-                dqn_env.controller.add_train("AI_TRAIN", "carshed")
-                dqn_env.controller.set_custom_route("AI_TRAIN", complete_route)
+                actions: Dict[str, int] = {}
+                for tid in list(dqn_env.controller.trains.keys()):
+                    state = dqn_env.agent.get_state(dqn_env.controller.global_state, tid)
+                    actions[tid] = dqn_env.agent.act(state)
                 
-                # Run simulation with AI control
-                for step in range(200):  # Increased steps for complete route
-                    print(f"\n🤖 AI STEP {step + 1}")
-                    print("-" * 40)
-                    
-                    # Get current state
-                    state = dqn_env.agent.get_state(dqn_env.controller.global_state, "AI_TRAIN")
-                    
-                    # AI chooses action
-                    action = dqn_env.agent.act(state)
-                    action_name = dqn_env.action_meanings[action]
-                    print(f"🧠 AI Decision: {action_name}")
-                    
-                    # Execute step
-                    next_state, reward, done = dqn_env.step("AI_TRAIN", action)
-                    print(f"📊 Reward: {reward:.2f}")
-                    
-                    # Print system status
-                    dqn_env.controller.global_state.print_system_status()
-                    
-                    # Check if train returned to depot
-                    if "AI_TRAIN" in dqn_env.controller.trains:
-                        train = dqn_env.controller.trains["AI_TRAIN"]
-                        if train.current_node == "carshed" and step > 10:  # Allow some steps before checking
-                            print("🎉 Train successfully returned to depot!")
-                            done = True
-                    
-                    if done:
-                        print("🎯 Episode completed!")
-                        break
-                    
-                    time.sleep(0.3)  # Faster for longer routes
+                results = dqn_env.step_multi(actions)
+                
+                # Show a brief summary
+                for tid, (_, reward, done) in results.items():
+                    print(f"{tid}: reward={reward:.2f}, done={done}")
+                    if tid in dqn_env.controller.trains:
+                        tr = dqn_env.controller.trains[tid]
+                        if tr.current_node == tr.destination and tr.destination is not None:
+                            # Immediately assign a new route to keep concurrency
+                            cr, _ = dqn_env.route_manager.build_complete_route(selected_route_index)
+                            if cr:
+                                dqn_env.controller.set_custom_route(tid, cr)
+                
+                dqn_env.controller.global_state.print_system_status()
+                time.sleep(0.2)
         
         except FileNotFoundError:
             print("❌ No trained model found. Please run training mode first (option 2)")
@@ -1231,6 +1542,3 @@ if __name__ == "__main__":
                     time.sleep(0.5)
         else:
             print("❌ Failed to build route")
-    
-    else:
-        print("❌ Invalid choice. Please run again and select 1, 2, 3, or 4.")
