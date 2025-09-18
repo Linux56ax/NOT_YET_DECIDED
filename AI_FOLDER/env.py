@@ -33,49 +33,49 @@ railway.add_node("idownCB0", type="intersection")
 railway.add_node("iupBC1", type="intersection")
 railway.add_node("idownCB1", type="intersection")
 
-railway.add_edge("carshed", "ibothBD0")
-railway.add_edge("ibothBD0", "carshed")
+railway.add_edge("carshed", "ibothBD0",length=300)
+railway.add_edge("ibothBD0", "carshed",length=300)
 
 
-railway.add_edge("A1", "iupAB3")
-railway.add_edge("iupAB3", "A1")
+railway.add_edge("A1", "iupAB3",length=50)
+railway.add_edge("iupAB3", "A1",length=50)
 
 
-railway.add_edge("iupAB3", "iupAB2")
-railway.add_edge("iupAB2", "iupAB1")
-railway.add_edge("iupAB1", "B1")
+railway.add_edge("iupAB3", "iupAB2",length=50)
+railway.add_edge("iupAB2", "iupAB1",length=20000)
+railway.add_edge("iupAB1", "B1",length=50)
 
 
-railway.add_edge("B1", "iupBC0")
-railway.add_edge("iupBC0", "iupBC1")
-railway.add_edge("iupBC1", "C1")
-railway.add_edge("C1", "iupBC1")  
+railway.add_edge("B1", "iupBC0",length=50)
+railway.add_edge("iupBC0", "iupBC1",length=50)
+railway.add_edge("iupBC1", "C1",length=50)
+railway.add_edge("C1", "iupBC1",length=50)
 
 
-railway.add_edge("C2", "idownCB0")
-railway.add_edge("idownCB0", "C2")  
-railway.add_edge("idownCB0", "idownCB1")
-railway.add_edge("idownCB1", "B2")
+railway.add_edge("C2", "idownCB0",length=50)
+railway.add_edge("idownCB0", "C2",length=50)  
+railway.add_edge("idownCB0", "idownCB1",length=50)
+railway.add_edge("idownCB1", "B2",length=50)
 
-railway.add_edge("B2", "idownBA0")
-railway.add_edge("idownBA0", "idownBA1")
-railway.add_edge("idownBA1", "idownBA3")
+railway.add_edge("B2", "idownBA0",length=50)
+railway.add_edge("idownBA0", "idownBA1",length=50)
+railway.add_edge("idownBA1", "idownBA3",length=20000)
 railway.add_edge("idownBA3", "idownBA2")
-railway.add_edge("idownBA2", "A2")
-railway.add_edge("A2", "idownBA2")  
+railway.add_edge("idownBA2", "A2",length=50)
+railway.add_edge("A2", "idownBA2",length=50)  
 
 
-railway.add_edge("idownBA1", "iupAB1")
-railway.add_edge("idownBA2", "iupAB2")
-railway.add_edge("idownBA3", "iupAB3")
-railway.add_edge("iupBC0", "idownCB0")
-railway.add_edge("iupBC1", "idownCB1")
+railway.add_edge("idownBA1", "iupAB1",length=25)
+railway.add_edge("idownBA2", "iupAB2",length=25)
+railway.add_edge("idownBA3", "iupAB3",length=25)
+railway.add_edge("iupBC0", "idownCB0",length=25)
+railway.add_edge("iupBC1", "idownCB1",length=25)
 
 
-railway.add_edge("D1", "ibothBD0")
-railway.add_edge("ibothBD0", "D1")
-railway.add_edge("ibothBD0", "idownBA1")
-railway.add_edge("idownBA0", "ibothBD0")
+railway.add_edge("D1", "ibothBD0",length=50)
+railway.add_edge("ibothBD0", "D1",length=50)
+railway.add_edge("ibothBD0", "idownBA1",length=10000)
+railway.add_edge("idownBA0", "ibothBD0",length=10000)
 
 def validate_network():
     """Validate the railway network structure"""
